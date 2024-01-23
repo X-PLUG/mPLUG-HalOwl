@@ -63,7 +63,7 @@ deepspeed llava/train/train_mem.py \
 
 1. Prepare data
 
-Please download the annotation of LLaVA instruction tuning data [llava_instruct_158k.json](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_instruct_150k.json), and download the COCO train2017 images [here](https://cocodataset.org/#download).
+Please download the annotation of LLaVA instruction tuning data [llava_instruct_158k.json](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_instruct_150k.json), and download the COCO train2017 images [here](https://cocodataset.org/#download). Download the hallcuination caption dataset (To be released). 
 
 2. Start instruction Finetuning.
 ```Shell
