@@ -23,10 +23,9 @@ deepspeed llava/train/train_mem.py \
     --deepspeed ./scripts/zero3.json \
     --model_name_or_path  ./ckpt/vicuna-7b-v1.5 \
     --version $PROMPT_VERSION \
-    --data_path  ./data/LLaVA-Pretrain/blip_laion_cc_sbu_558k.json \
+    --data_path  ./data/LLaVA-Pretrain/contrastive_data.json \
     --image_folder ./data/LLaVA-Pretrain/images \
-    --vision_tower ./ckpt/clip-vit-large-patch14-334 \
-    --pretrain_mm_mlp_adapter ./ckpt/llava_use/llava-1.5-vicuna-v1.5-7b-pretrain-mmprojector/mm_projector.bin  \
+    --vision_tower ./ckpt/clip-vit-large-patch14-334 \ 
     --tune_mm_mlp_adapter True \
     --mm_projector_type mlp2x_gelu \
     --mm_vision_select_layer -2 \
@@ -56,7 +55,18 @@ deepspeed llava/train/train_mem.py \
  
 
 ```
-</details>
+This is a example of the data in contrastive_data.json:
+```Shell
+{'image': 'train2014/COCO_train2014_000000350235.jpg',
+ 'text': 'A man attempts to separate men during a fight at a street basketball game.',
+ 'dataset_name': 'coco',
+ 'task_type': 'pretrain',
+ 'Hallucination caption': 'A man attempts to separate women during a fight at a street basketball game.',
+ 'conversations': [{'from': 'human',
+   'value': 'Give a brief description of the image.\n<image>'},
+  {'from': 'gpt',
+   'value': 'A man attempts to separate men during a fight at a street basketball game.'}]}
+```
 
 
 ### Visual Instruction Tuning
