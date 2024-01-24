@@ -16,7 +16,7 @@
 1. Prepare data
  Download the hallcuination caption dataset (To be released). 
 
- This is a example of the data in contrastive_data.json:
+ This is a example of the data in hallcuination_caption.json:
 ```Shell
 {'image': 'train2014/COCO_train2014_000000350235.jpg',
  'text': 'A man attempts to separate men during a fight at a street basketball game.',
@@ -38,7 +38,7 @@ deepspeed llava/train/train_mem.py \
     --deepspeed ./scripts/zero3.json \
     --model_name_or_path  ./ckpt/vicuna-7b-v1.5 \
     --version $PROMPT_VERSION \
-    --data_path  ./data/LLaVA-Pretrain/contrastive_data.json \
+    --data_path  ./data/LLaVA-Pretrain/hallcuination_caption.json \
     --image_folder ./data/LLaVA-Pretrain/images \
     --vision_tower ./ckpt/clip-vit-large-patch14-334 \ 
     --tune_mm_mlp_adapter True \
