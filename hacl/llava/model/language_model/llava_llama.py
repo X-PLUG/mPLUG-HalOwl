@@ -22,11 +22,11 @@ import torch.nn.functional as F
 from transformers import AutoConfig, AutoModelForCausalLM, \
                          LlamaConfig, LlamaModel, LlamaForCausalLM
 
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from llava.transformers.modeling_outputs import CausalLMOutputWithPast
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 from deepspeed import comm as dist
-
+import copy
 class AllGather(torch.autograd.Function):
     """An autograd function that performs allgather on a tensor."""
 
@@ -58,10 +58,10 @@ def concat_all_gather(tensor):
     tensors_gather = [torch.ones_like(tensor)
                       for _ in range(dist.get_world_size())]
     dist.all_gather(tensors_gather, tensor, async_op=False)
-
+    
     output = torch.cat(tensors_gather, dim=0)
     return output
-
+    
 class LlavaConfig(LlamaConfig):
     model_type = "llava"
 
@@ -71,7 +71,7 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
 
     def __init__(self, config: LlamaConfig):
         super(LlavaLlamaModel, self).__init__(config)
-
+    
     @torch.no_grad()
     def _dequeue_and_enqueue(self, image_feat, text_feat):
         # gather keys before updating queue
@@ -84,7 +84,7 @@ class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
         self.image_queue[:, ptr:ptr + batch_size] = image_feats.T
         self.text_queue[:, ptr:ptr + batch_size] = text_feats.T
         ptr = (ptr + batch_size) % self.config.queue_size  # move pointer
-        self.queue_ptr[0] = ptr
+        self.queue_ptr[0] = ptr 
 
 class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     config_class = LlavaConfig
@@ -92,12 +92,14 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     def __init__(self, config):
         super(LlamaForCausalLM, self).__init__(config)
         self.model = LlavaLlamaModel(config)
-
+        
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
-        
+
+    def get_model(self):
+        return self.model
     def return_last_token_hidden(
         self,
         input_ids: torch.LongTensor = None,
@@ -110,7 +112,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        use_eos: Optional[bool] = None
+        use_eos: Optional[bool] = None,
+        captions: Optional[torch.LongTensor] = None,
+        hallucination_caption: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -170,18 +174,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 sequence_lengths = (torch.ne(input_ids, self.tokenizer.pad_token_id).sum(-1) - 1).to(hidden_states.device)
         else:
             sequence_lengths = -1
-        
+
         global_representation = hidden_states[torch.arange(batch_size, device=hidden_states.device), sequence_lengths,:]
-        return global_representation
-    
-    def get_model(self):
-        return self.model
-    
-    def add_tokenizer(self, tokenizer):
-        self.tokenizer = tokenizer
-
-
-    
+        return global_representation, outputs
     
     def forward(
         self,
@@ -194,32 +189,30 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
-        return_dict: Optional[bool] = None,
         captions: Optional[torch.LongTensor] = None,
+        return_dict: Optional[bool] = None,
+        captions_attention_mask: Optional[torch.LongTensor] = None,
+        hallucination_caption: Optional[torch.LongTensor] = None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        input_ids, attention_mask, past_key_values, inputs_embeds, labels, image_features  = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images)
         
-        input_ids, attention_mask, past_key_values, inputs_embeds, labels, image_features = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images)
-        # attention_mask, past_key_values, inputs_embeds, labels, image_features = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images)
-        
-        if self.model.config.calculate_contrastive_loss and captions is not None:
-            # Calculate contrastive loss
-            use_eos = self.model.config.add_eos_token_to_image
-            if use_eos:
-                eos_embeds = self.get_model().get_input_embeddings()(torch.tensor([[self.tokenizer.eos_token_id]]).to(images.device))
-                eos_embeds = eos_embeds.expand(image_features.shape[0], -1, -1)
+
+        if captions is not None:
+            if self.model.config.add_eos:
+                eos_embeds =  self.get_model().get_input_embeddings()(torch.tensor([[self.tokenizer.eos_token_id]]).to(images.device))
+                eos_embeds =  eos_embeds.expand(image_features.shape[0], -1, -1)
                 image_features = torch.cat([ image_features,eos_embeds], dim=1)
             
-            image_last_token_hidden = self.return_last_token_hidden(input_ids=None, inputs_embeds=image_features, use_eos=use_eos)
-            text_last_token_hidden = self.return_last_token_hidden(input_ids=captions,inputs_embeds=None, use_eos =use_eos )
-            
+            image_last_token_hidden,_ = self.return_last_token_hidden(input_ids=None, inputs_embeds=image_features, use_eos=self.model.config.add_eos)
+            text_last_token_hidden,outputs = self.return_last_token_hidden(input_ids=captions, inputs_embeds=None, use_eos =self.model.config.add_eos )
+
             image_global_embedding = F.normalize(self.model.vision_projector(image_last_token_hidden))
             text_global_embedding = F.normalize(self.model.text_projector(text_last_token_hidden))
-            
             
             if self.model.config.use_queue:
                 text_queue = self.model.text_queue.clone().detach()
@@ -230,32 +223,73 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 if self.model.config.gather_all:
                     image_feat_all = allgather(image_global_embedding, dist.get_rank(), dist.get_world_size()).t()
                     text_feat_all = allgather(text_global_embedding, dist.get_rank(), dist.get_world_size()).t()
+                    
                 else:
                     image_feat_all = image_global_embedding.t()
-                    text_feat_all = text_global_embedding.t()
-
+                    if hallucination_caption is not None:
+                        hallucination_last_token_hidden,_ = self.return_last_token_hidden(input_ids=hallucination_caption, inputs_embeds=None, use_eos =self.model.config.add_eos )
+                        hallucination_global_embedding = F.normalize(self.model.text_projector(hallucination_last_token_hidden))
+                        text_feat_all = torch.cat([text_global_embedding.t(), hallucination_global_embedding.t()], dim=1)
+                        print(text_feat_all.shape)
+                    else:   
+                        text_feat_all = text_global_embedding.t()
+            
             with torch.no_grad():
                 self.model.itc_temp.clamp_(0.001, 0.5)
+           
+            
             sim_i2t = image_global_embedding @ text_feat_all / self.model.itc_temp
             sim_t2i = text_global_embedding @ image_feat_all / self.model.itc_temp
             
-            sim_targets = torch.zeros(sim_i2t.size()).to(inputs_embeds.device)
-            sim_targets.fill_diagonal_(1)
+            sim_i2t_targets = torch.zeros(sim_i2t.size()).to(inputs_embeds.device)
+            sim_i2t_targets.fill_diagonal_(1)
 
-            loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1) * sim_targets, dim=1).mean()
-            loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1) * sim_targets, dim=1).mean()
-
+            sim_t2i_targets = torch.zeros(sim_t2i.size()).to(inputs_embeds.device)
+            sim_t2i_targets.fill_diagonal_(1)
+                
+            loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1) * sim_i2t_targets, dim=1).mean()
+            loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1) * sim_t2i_targets, dim=1).mean()
+            
             loss_ita = (loss_i2t + loss_t2i) / 2
-            # updata queue
+            loss = None
+            loss_generation=None
+            
+            if self.config.do_generation:
+                outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict
+                )
+
+                hidden_states = outputs[0]
+                logits = self.lm_head(hidden_states)
+                
+                if labels is not None:
+                    # Shift so that tokens < n predict n
+                    shift_logits = logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    # Flatten the tokens
+                    loss_fct = CrossEntropyLoss()
+                    shift_logits = shift_logits.view(-1, self.config.vocab_size)
+                    shift_labels = shift_labels.view(-1)
+                    # Enable model/pipeline parallelism
+                    shift_labels = shift_labels.to(shift_logits.device)
+                    loss_generation = loss_fct(shift_logits, shift_labels)
+                    loss = loss_generation + loss_ita * self.model.config.ita_weight
+
+            else:
+                loss = loss_ita 
+                loss_generation = loss_ita
+                logits = None
             if self.model.config.use_queue:
                 self.model._dequeue_and_enqueue(image_global_embedding, text_global_embedding)
-        else:
-            loss_ita=None
-        assert loss_ita is not None or self.model.config.only_contrastive_loss is False, "Contrastive loss is not calculated."
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        
-            # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model(
+        else:     
+            outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
@@ -265,10 +299,10 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict
             )
-        if not self.model.config.only_contrastive_loss:
+
             hidden_states = outputs[0]
             logits = self.lm_head(hidden_states)
-
+            
             loss = None
             if labels is not None:
                 # Shift so that tokens < n predict n
@@ -280,15 +314,14 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 shift_labels = shift_labels.view(-1)
                 # Enable model/pipeline parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
-                loss = loss_fct(shift_logits, shift_labels)
-            if loss_ita is not None:
-                loss = loss + loss_ita
-        else:
-            loss = loss_ita
-            logits = None
-
+                loss_generation = loss_fct(shift_logits, shift_labels)
+            loss_ita = loss_generation
+            loss = loss_generation
+        
+        loss_dict = {'ce_loss': loss_generation.clone().detach(),'ita_loss': loss_ita.clone().detach()}
+        
         if not return_dict:
-            output = (logits,) + outputs[1:]
+            output = (logits,) + outputs[1:] +[loss_dict]
             return (loss,) + output if loss is not None else output
 
         return CausalLMOutputWithPast(
@@ -297,7 +330,12 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            loss_dict = loss_dict
         )
+        
+    def add_tokenizer(self, tokenizer):
+        self.tokenizer = tokenizer
+
 
     def prepare_inputs_for_generation(
         self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
