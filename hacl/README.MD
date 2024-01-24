@@ -13,8 +13,23 @@
 
 
 ### Pretrain (feature alignment)
+1. Prepare data
+ Download the hallcuination caption dataset (To be released). 
 
+ This is a example of the data in contrastive_data.json:
+```Shell
+{'image': 'train2014/COCO_train2014_000000350235.jpg',
+ 'text': 'A man attempts to separate men during a fight at a street basketball game.',
+ 'dataset_name': 'coco',
+ 'task_type': 'pretrain',
+ 'Hallucination caption': 'A man attempts to separate women during a fight at a street basketball game.',
+ 'conversations': [{'from': 'human',
+   'value': 'Give a brief description of the image.\n<image>'},
+  {'from': 'gpt',
+   'value': 'A man attempts to separate men during a fight at a street basketball game.'}]}
+```
 
+2.  Start pretraining.
 ```Shell
 MODEL_VERSION=vicuna-7b-v1.5 
 PROMPT_VERSION=plain
@@ -52,28 +67,15 @@ deepspeed llava/train/train_mem.py \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to wandb
- 
+ ```
 
-```
-This is a example of the data in contrastive_data.json:
-```Shell
-{'image': 'train2014/COCO_train2014_000000350235.jpg',
- 'text': 'A man attempts to separate men during a fight at a street basketball game.',
- 'dataset_name': 'coco',
- 'task_type': 'pretrain',
- 'Hallucination caption': 'A man attempts to separate women during a fight at a street basketball game.',
- 'conversations': [{'from': 'human',
-   'value': 'Give a brief description of the image.\n<image>'},
-  {'from': 'gpt',
-   'value': 'A man attempts to separate men during a fight at a street basketball game.'}]}
-```
 
 
 ### Visual Instruction Tuning
 
 1. Prepare data
 
-Please download the annotation of LLaVA instruction tuning data [llava_instruct_158k.json](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_instruct_150k.json), and download the COCO train2017 images [here](https://cocodataset.org/#download). Download the hallcuination caption dataset (To be released). 
+Please download the annotation of LLaVA instruction tuning data [llava_instruct_158k.json](https://huggingface.co/datasets/liuhaotian/LLaVA-Instruct-150K/blob/main/llava_instruct_150k.json), and download the COCO train2017 images [here](https://cocodataset.org/#download). 
 
 2. Start instruction Finetuning.
 ```Shell
