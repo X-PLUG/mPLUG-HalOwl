@@ -3,7 +3,7 @@
 ![logo](owl.png?v=1&type=image)
 
 # Works
- - [AMBER](https://github.com/junyangwang0410/AMBER) --- An Automated Multi-dimensional Benchmark for Multi-modal Hallucination Evaluation ![logo](AMBER.jpg?v=1&type=image)
+ - [AMBER](https://github.com/X-PLUG/mPLUG-HalOwl/tree/main/AMBER) --- An Automated Multi-dimensional Benchmark for Multi-modal Hallucination Evaluation ![logo](AMBER.jpg?v=1&type=image)
  - [HACL](https://arxiv.org/abs/2312.06968) --- Hallucination Augmented Contrastive Learning for Multimodal Large Language Model. ![logo](hacl.png?v=1&type=image)
  - [HaELM](https://github.com/junyangwang0410/HaELM) --- An automatic MLLM hallucination detection framework.![logo](HaELM.png?v=1&type=image)
 # License
